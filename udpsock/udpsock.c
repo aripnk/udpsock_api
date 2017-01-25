@@ -26,7 +26,7 @@ udpsock_init(udpsock_t* udpsock, char *host, char *port, int flags, int bcast)
 	lastError = UDPSOCK_ERR_GETADDRINFO; // if fail, error in getaddrinfo.
 	if (getaddrinfo(host, port, &aInfo, &rstInfo) != 0) return FALSE;
 
-  lastError = UDPSOCK_ERR_CREATESOCKET; //if fail
+	lastError = UDPSOCK_ERR_CREATESOCKET; //if fail
 	for (rp = rstInfo; rp != NULL; rp = rp->ai_next){
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
@@ -98,4 +98,10 @@ int
 udpsock_getfd(udpsock_t* udpsock)
 {
 	return udpsock->sock;
+}
+
+struct event*
+udpsock_getev(udpsock_t* udpsock)
+{
+	return udpsock->ev;
 }
