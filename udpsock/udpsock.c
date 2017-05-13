@@ -1,107 +1,152 @@
-/*Arif Nur Khoirudin
-  hello@arifnurkhoirudin.com*/
+/*
+ * Copyright (c) 2017 Arif Nur Khoirudin
+ *
+ * mail : <hello@arifnurkhoirudin.com>
+ * site : https://arifnurkhoirudin.com
+ *
+*/
 
 #include "udpsock.h"
 
+static int
+_bind_dgramsocket(int fd, const char* host, uint16_t port)
+{
+  struct sockaddr_in localaddr;
+
+  // set local address
+  localaddr.sin_family = AF_INET;
+  localaddr.sin_addr.s_addr = inet_addr(host);
+  localaddr.sin_port = htons(port);
+
+  return bind(fd, (struct sockaddr *) &localaddr, sizeof(struct sockaddr));
+}
+
+static int
+_make_dgramsocket(int sockbufsize)
+{
+  int fd=-1;
+  int set=1;
+  int flags;
+
+  // Create endpoint
+  if ((fd=socket(AF_INET, SOCK_DGRAM, 0)) < 0){
+    return -1;
+  }
+  // Set socket option
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &set, sizeof(int)) < 0) {
+	  goto fail_return;
+  }
+  // set receive buffer
+  if (sockbufsize > 0){
+    if( setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sockbufsize, sizeof(int)) < 0 ) {
+	    goto fail_return;
+    }
+    // set send buffer
+    if( setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sockbufsize, sizeof(int)) < 0 ) {
+	    goto fail_return;
+    }
+  }
+
+  // set non blocking
+  if ((flags = fcntl(fd, F_GETFL, NULL)) < 0) {
+	  goto fail_return;
+  }
+  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+	  goto fail_return;
+  }
+
+  return fd;
+
+fail_return:
+  if (fd != -1) close(fd);
+  return -1;
+}
+
+
 int
-udpsock_init(udpsock_t* udpsock, char *host, char *port, int flags, int bcast)
+udpsock_init(udpsock_t* udpsock, char *host, uint16_t port, int flags, int bcast)
 {
 	if (udpsock == NULL) return -1;
 	memset(udpsock, 0, sizeof(udpsock_t));
 
-	struct addrinfo aInfo, *rstInfo, *rp;
-	int sock, on = 1;
-	struct sockaddr sockAddr;
-	socklen_t sockAddrLen;
+	udpsock->sock = _make_dgramsocket(0);
+	_bind_dgramsocket(udpsock->sock, host, port);
 
-	memset(&aInfo, 0, sizeof(struct addrinfo));
-	aInfo.ai_family 		= AF_INET;
-	aInfo.ai_socktype 	= SOCK_DGRAM;
-	aInfo.ai_flags 			= flags;
-	aInfo.ai_protocol 	= 0;
-	aInfo.ai_canonname	= NULL;
-	aInfo.ai_addr 			= NULL;
-	aInfo.ai_next 			= NULL;
-
-	lastError = UDPSOCK_ERR_GETADDRINFO; // if fail, error in getaddrinfo.
-	if (getaddrinfo(host, port, &aInfo, &rstInfo) != 0) return FALSE;
-
-	lastError = UDPSOCK_ERR_CREATESOCKET; //if fail
-	for (rp = rstInfo; rp != NULL; rp = rp->ai_next){
-		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-		if (flags == AI_PASSIVE){
-			fcntl(sock, F_SETFL, O_NONBLOCK);
-			lastError = UDPSOCK_ERR_SOCKBIND; //if fail
-			if (bind(sock, rp->ai_addr, rp->ai_addrlen) != 0){
-				close(sock);
-				continue;
-			}
-			// ai_flags is AI_PASSIVE, and bind successfull...
-			break;
-		}
-		memcpy(&sockAddr, rp->ai_addr, sizeof(sockAddr));
-		sockAddrLen 	= rp->ai_addrlen;
-		break;
-	}
-
-	udpsock->sock = sock;
-	udpsock->sockAddr = sockAddr;
-	udpsock->sockAddrLen = sockAddrLen;
-
-	freeaddrinfo(rstInfo);
-	if (sock <= -1) return -1;
+	if (udpsock->sock == -1) return -1;
 	return 0;
 }
+
 
 int
 udpsock_free(udpsock_t* udpsock)
 {
-	lastError = UDPSOCK_ERR_CLOSE;
+	udpsock->lastError = UDPSOCK_ERR_CLOSE;
 	if (udpsock == NULL) return 0;
 	if (udpsock->sock != -1) close(udpsock->sock);
 	memset(udpsock, 0, sizeof(udpsock_t));
 	return 0;
 }
 
-int
+ssize_t
 udpsock_fetch(udpsock_t* udpsock, void *packet, int psize)
 {
-	int recvLen, flags;
-	struct sockaddr_storage srcAddr;
+  if (udpsock == NULL) return -1;
+	ssize_t recvLen;
+	struct sockaddr_in srcAddr;
 	socklen_t sockAddrLen = sizeof(srcAddr);
 
-	lastError = UDPSOCK_ERR_RECVFROM; //if fail
+	udpsock->lastError = UDPSOCK_ERR_RECVFROM; //if fail
 	recvLen = recvfrom(udpsock->sock, packet, psize, MSG_DONTWAIT, (struct sockaddr *) &srcAddr, &sockAddrLen);
-	if (recvLen == -1) return -1;
-	if (recvLen != psize) return -1;
 
 	//sementara
 	udpsock->srcAddr = srcAddr;
 	udpsock->sockAddrLen = sockAddrLen;
 
-	if (recvLen > 0){
-		if (udpsock->srcAddress != NULL) memcpy(udpsock->srcAddress, (void *) &srcAddr, sizeof(struct sockaddr));
-		return 0;
-	}
-	return -1;
+	return recvLen;
+}
+
+ssize_t
+udpsock_fetch_block(udpsock_t* udpsock, void *packet, int psize)
+{
+  if (udpsock == NULL) return -1;
+	ssize_t recvLen;
+	struct sockaddr_in srcAddr;
+	socklen_t sockAddrLen = sizeof(srcAddr);
+
+	udpsock->lastError = UDPSOCK_ERR_RECVFROM; //if fail
+	recvLen = recvfrom(udpsock->sock, packet, psize, MSG_WAITALL, (struct sockaddr *) &srcAddr, &sockAddrLen);
+
+	//sementara
+	udpsock->srcAddr = srcAddr;
+	udpsock->sockAddrLen = sockAddrLen;
+
+	return recvLen;
 }
 
 int
 udpsock_send(udpsock_t* udpsock, void *packet, int psize)
 {
-	lastError = UDPSOCK_ERR_SEND;
+  if (udpsock == NULL) return -1;
+	udpsock->lastError = UDPSOCK_ERR_SEND;
 	return (sendto(udpsock->sock, packet, psize, 0, &udpsock->sockAddr, udpsock->sockAddrLen) == psize);
+}
+
+int
+udpsock_sendto(udpsock_t* udpsock, struct sockaddr_in* addr, void *packet, int psize)
+{
+	if (udpsock == NULL || addr == NULL) return -1;
+	return (sendto(udpsock->sock, packet, psize, 0, (struct sockaddr*)addr, sizeof(struct sockaddr)) == psize);
+}
+
+int
+udpsock_reply(udpsock_t* udpsock, void *packet, int psize)
+{
+	udpsock->lastError = UDPSOCK_ERR_SEND;
+	return (sendto(udpsock->sock, packet, psize, 0, (struct sockaddr *)&udpsock->srcAddr, udpsock->sockAddrLen) == psize);
 }
 
 int
 udpsock_getfd(udpsock_t* udpsock)
 {
 	return udpsock->sock;
-}
-
-struct event*
-udpsock_getev(udpsock_t* udpsock)
-{
-	return udpsock->ev;
 }
